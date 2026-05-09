@@ -436,49 +436,46 @@ function draw() {
 
 // ── BACKGROUND ──────────────────────────────────────────────
 function drawBg() {
-  const rl=riverLeft, rr=riverRight, rw=rr-rl;
+  const rl = riverLeft, rv = riverRight, rw = rv - rl;
 
-  // grass banks
-  const lg=ctx.createLinearGradient(0,0,rl,0);
-  lg.addColorStop(0,'#2d5a1b'); lg.addColorStop(1,'#3a7a28');
-  ctx.fillStyle=lg; ctx.fillRect(0,0,rl,CH);
-  const rg=ctx.createLinearGradient(rr,0,CW,0);
-  rg.addColorStop(0,'#3a7a28'); rg.addColorStop(1,'#2d5a1b');
-  ctx.fillStyle=rg; ctx.fillRect(rr,0,CW-rr,CH);
+  // Full canvas base
+  ctx.fillStyle = '#1e5599';
+  ctx.fillRect(0, 0, CW, CH);
 
-  // grass dots
-  ctx.fillStyle='rgba(60,120,40,0.5)';
-  const gs=22, go=bgScroll%gs;
-  for(let y=-go;y<CH+gs;y+=gs)
-    for(let x=4;x<rl-4;x+=gs) { ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill(); }
-  for(let y=-go;y<CH+gs;y+=gs)
-    for(let x=rr+4;x<CW-4;x+=gs) { ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill(); }
+  // Grass banks (solid color, no gradient)
+  ctx.fillStyle = '#336622';
+  ctx.fillRect(0, 0, rl, CH);
+  ctx.fillRect(rv, 0, CW - rv, CH);
 
-  // river
-  const rv=ctx.createLinearGradient(rl,0,rr,0);
-  rv.addColorStop(0,'#1a4a8a'); rv.addColorStop(0.5,'#1e5599'); rv.addColorStop(1,'#1a4a8a');
-  ctx.fillStyle=rv; ctx.fillRect(rl,0,rw,CH);
-
-  // ripples
-  ctx.strokeStyle='rgba(100,180,255,0.22)'; ctx.lineWidth=1.5;
-  const rsp=40, ro=bgScroll%rsp;
-  for(let y=-ro;y<CH+rsp;y+=rsp) {
-    ctx.beginPath(); ctx.moveTo(rl+8,y); ctx.lineTo(rr-8,y); ctx.stroke();
+  // Grass dots
+  ctx.fillStyle = 'rgba(80,160,50,0.5)';
+  const gs = 22, go = bgScroll % gs;
+  for (let y = -go; y < CH + gs; y += gs) {
+    for (let x = 6; x < rl - 4; x += gs) { ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill(); }
+    for (let x = rv + 6; x < CW - 4; x += gs) { ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill(); }
   }
 
-  // lane dividers
-  const lw=rw/LANE_COUNT;
-  ctx.strokeStyle='rgba(255,255,255,0.28)'; ctx.lineWidth=2;
-  ctx.setLineDash([28,20]); ctx.lineDashOffset=-(bgScroll%48);
-  for(let l=1;l<LANE_COUNT;l++) {
-    const lx=rl+lw*l; ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx,CH); ctx.stroke();
+  // Ripples
+  ctx.strokeStyle = 'rgba(100,180,255,0.22)'; ctx.lineWidth = 1.5;
+  const rsp = 40, ro = bgScroll % rsp;
+  for (let y = -ro; y < CH + rsp; y += rsp) {
+    ctx.beginPath(); ctx.moveTo(rl + 8, y); ctx.lineTo(rv - 8, y); ctx.stroke();
+  }
+
+  // Lane dividers
+  const lw = rw / LANE_COUNT;
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = 2;
+  ctx.setLineDash([28, 20]); ctx.lineDashOffset = -(bgScroll % 48);
+  for (let l = 1; l < LANE_COUNT; l++) {
+    const lx = rl + lw * l;
+    ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx, CH); ctx.stroke();
   }
   ctx.setLineDash([]);
 
-  // borders
-  ctx.strokeStyle='rgba(80,200,100,0.7)'; ctx.lineWidth=3;
-  ctx.beginPath(); ctx.moveTo(rl,0); ctx.lineTo(rl,CH); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(rr,0); ctx.lineTo(rr,CH); ctx.stroke();
+  // Bank borders
+  ctx.strokeStyle = 'rgba(80,200,100,0.8)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(rl, 0); ctx.lineTo(rl, CH); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rv, 0); ctx.lineTo(rv, CH); ctx.stroke();
 }
 
 function drawCoin(c) {
@@ -828,7 +825,12 @@ let last=0;
 function loop(ts){
   requestAnimationFrame(loop);
   if(ts-last<14) return; last=ts;
-  update(); draw();
+  try { update(); draw(); } catch(err) {
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,CW,CH);
+    ctx.fillStyle='#ff4444'; ctx.font='14px sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('错误: '+err.message, CW/2, CH/2);
+  }
 }
 
 initGame(); state='menu'; requestAnimationFrame(loop);
