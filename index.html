@@ -502,12 +502,6 @@ function drawEnemy(e) {
   ctx.fillText(e.type.emoji, e.x, e.y);
   ctx.restore();
 
-  // HP bar
-  const bw=e.type.boss?56:30, bh=4;
-  const bx=e.x-bw/2, by=e.y-(e.type.boss?38:22);
-  ctx.fillStyle='#222'; ctx.fillRect(bx-1,by-1,bw+2,bh+2);
-  ctx.fillStyle=e.type.boss?'#ff2200':'#22cc44';
-  ctx.fillRect(bx,by,bw*Math.max(0,e.hp/e.maxHp),bh);
 }
 
 function drawPlayer() {
