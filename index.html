@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>小龙虾大战</title>
+<title>小龙虾大逃亡</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -15,10 +15,7 @@ body {
   overflow: hidden;
   touch-action: none;
 }
-canvas {
-  display: block;
-  image-rendering: pixelated;
-}
+canvas { display: block; }
 </style>
 </head>
 <body>
@@ -27,1290 +24,820 @@ canvas {
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 
-// ---- RESPONSIVE SIZING ----
 let CW, CH;
 function resize() {
   const ratio = window.devicePixelRatio || 1;
-  const maxW = 420;
-  const availW = Math.min(window.innerWidth, maxW);
+  const availW = Math.min(window.innerWidth, 420);
   const availH = window.innerHeight;
-  const aspect = 9 / 16;
   let w, h;
-  if (availW / availH < aspect) {
-    w = availW;
-    h = availW / aspect;
-  } else {
-    h = availH;
-    w = availH * aspect;
-  }
+  if (availW / availH < 9 / 16) { w = availW; h = availW / (9/16); }
+  else { h = availH; w = availH * (9/16); }
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
   canvas.width = Math.round(w * ratio);
   canvas.height = Math.round(h * ratio);
   ctx.scale(ratio, ratio);
-  CW = w;
-  CH = h;
+  CW = w; CH = h;
 }
 resize();
-window.addEventListener('resize', () => { resize(); });
+window.addEventListener('resize', resize);
 
-// ---- CONSTANTS ----
-const BASE_SPEED = 3;
-const RIVER_WIDTH_FRAC = 0.62; // fraction of CW that is river
-const LANE_COUNT = 3;
+// ── CONSTANTS ──────────────────────────────────────────────
+const BASE_SPEED   = 3;
+const RIVER_FRAC   = 0.62;
+const LANE_COUNT   = 3;
+const SHIELD_DIST  = 300;   // every N meters → +1 shield charge
+const HEAL_DIST    = 800;   // every N meters → +1 heal charge
+const MAX_SHIELD_CHARGES = 3;
+const MAX_HEAL_CHARGES   = 2;
+const PLAYER_Y_MIN_FRAC  = 0.45;  // player can move up to here
+const PLAYER_Y_MAX_FRAC  = 0.88;
 
-// ---- WEAPONS ----
-const WEAPONS = {
-  bare:    { name:'裸钳',     emoji:'🦞', atk:1, uses:Infinity, area:false, knockback:0 },
-  bayonet: { name:'🗡️刺刀',  emoji:'🗡️', atk:3, uses:10,      area:false, knockback:0 },
-  fork:    { name:'🔱叉子',  emoji:'🔱', atk:2, uses:8,       area:true,  knockback:0 },
-  hammer:  { name:'🔨锤子',  emoji:'🔨', atk:5, uses:6,       area:false, knockback:10 },
-  chili:   { name:'🌶️炸弹', emoji:'🌶️', atk:8, uses:1,       area:true,  knockback:5  },
-};
-
-// ---- MONSTER TYPES ----
+// ── MONSTER TYPES ───────────────────────────────────────────
 const MONSTER_TYPES = {
-  worm:     { name:'毛毛虫', emoji:'🐛', hp:1,  speed:1.5, minDist:0,    reward:10,  ranged:false, boss:false },
-  crab:     { name:'螃蟹兵', emoji:'🦀', hp:3,  speed:1.2, minDist:200,  reward:25,  ranged:false, boss:false, shield:true },
-  frog:     { name:'青蛙',   emoji:'🐸', hp:2,  speed:2.0, minDist:500,  reward:20,  ranged:false, boss:false },
-  scorpion: { name:'蝎子',   emoji:'🦂', hp:4,  speed:1.0, minDist:1000, reward:35,  ranged:true,  boss:false, projEmoji:'🪡' },
-  octopus:  { name:'章鱼',   emoji:'🐙', hp:3,  speed:1.3, minDist:700,  reward:30,  ranged:true,  boss:false, spreadShot:true, projEmoji:'🖤' },
-  lizard:   { name:'壁虎',   emoji:'🦎', hp:5,  speed:1.6, minDist:1500, reward:50,  ranged:true,  boss:false, projEmoji:'🪨' },
-  boss:     { name:'BOSS',   emoji:'💀', hp:20, speed:1.8, minDist:500,  reward:150, ranged:true,  boss:true,  projEmoji:'💥' },
+  worm:     { name:'毛毛虫', emoji:'🐛', hp:1, spd:1.4, minDist:0,    reward:5,  ranged:false, homing:false },
+  crab:     { name:'螃蟹兵', emoji:'🦀', hp:2, spd:1.1, minDist:100,  reward:8,  ranged:false, homing:true  },
+  frog:     { name:'青蛙',   emoji:'🐸', hp:1, spd:2.2, minDist:400,  reward:8,  ranged:false, homing:false, jumpy:true },
+  scorpion: { name:'蝎子',   emoji:'🦂', hp:2, spd:0.9, minDist:200,  reward:12, ranged:true,  projEmoji:'🔴', shootCd:90 },
+  octopus:  { name:'章鱼',   emoji:'🐙', hp:2, spd:1.0, minDist:500,  reward:15, ranged:true,  projEmoji:'🖤', shootCd:70, spread:true },
+  lizard:   { name:'壁虎',   emoji:'🦎', hp:3, spd:1.4, minDist:1200, reward:20, ranged:true,  projEmoji:'🪨', shootCd:55, fast:true },
+  boss:     { name:'BOSS',   emoji:'💀', hp:15,spd:1.5, minDist:500,  reward:80, ranged:true,  projEmoji:'💥', shootCd:45, boss:true },
 };
 
-// ---- ITEM TYPES ----
-const ITEM_TYPES = [
-  { id:'garlic',  emoji:'🧄', name:'大蒜'     },
-  { id:'beer',    emoji:'🍺', name:'啤酒'     },
-  { id:'ice',     emoji:'❄️', name:'冰块'     },
-  { id:'shield',  emoji:'🛡️', name:'蟹壳盾'  },
-  { id:'bayonet', emoji:'🗡️', name:'刺刀'    },
-  { id:'fork',    emoji:'🔱', name:'叉子'     },
-  { id:'hammer',  emoji:'🔨', name:'锤子'     },
-  { id:'chili',   emoji:'🌶️', name:'辣椒炸弹' },
-];
-
-// ---- STATE ----
+// ── STATE ───────────────────────────────────────────────────
 let state = 'menu';
-let bestDist = parseInt(localStorage.getItem('lobster_best') || '0');
+let bestDist = +localStorage.getItem('ldx_best') || 0;
+let totalCoins = +localStorage.getItem('ldx_coins') || 0;
 
-let player, enemies, items, particles, projectiles, coins;
-let distance, speed, spawnTimer, itemSpawnTimer, coinSpawnTimer;
-let monstersKilled, bestWeapon, score, coinsCollected;
-let bossNext, invincibleTimer, freezeTimer;
-let shakeTimer, darkOverlay;
-let bgScroll; // scrolling offset for road/river lanes
-let riverLeft, riverRight; // pixel bounds of the river lane
-let totalCoins = parseInt(localStorage.getItem('lobster_coins') || '0');
+let player, enemies, coins, particles, projectiles;
+let distance, speed, bgScroll;
+let spawnTimer, coinSpawnTimer;
+let monstersAvoided, coinsCollected;
+let bossNext, shakeTimer, darkOverlay;
+let freezeTimer;
 
-// ---- JOYSTICK STATE ----
-const joystick = {
-  active: false,
-  baseX: 0,
-  baseY: 0,
-  dx: 0,        // -1..1 horizontal displacement ratio
-  touchId: null,
-  radius: 44,   // visual base radius
-  knobRadius: 22,
-  maxDrag: 50,
+// skill state
+let shieldCharges, healCharges;
+let shieldActive, shieldTimer;
+let nextShieldMilestone, nextHealMilestone;
+let skillFlash; // { text, timer }
+
+let riverLeft, riverRight;
+
+// ── JOYSTICK (right side, full 2D) ──────────────────────────
+const joy = {
+  active: false, touchId: null,
+  baseX: 0, baseY: 0,
+  dx: 0, dy: 0,
+  radius: 52, knobR: 24, maxDrag: 50,
 };
 
-// ---- BUTTON STATE ----
-const btnAttack = { pressed: false, touchId: null };
-const btnBlock  = { pressed: false, touchId: null };
+// ── SKILL BUTTONS (left side) ────────────────────────────────
+const btnShield = { pressed: false, touchId: null };
+const btnHeal   = { pressed: false, touchId: null };
 
-// ---- INIT ----
+function getShieldBtnLayout() {
+  const bw = 68, bh = 68;
+  return { bx: 12, by: CH - bh * 2 - 24, bw, bh };
+}
+function getHealBtnLayout() {
+  const bw = 68, bh = 68;
+  return { bx: 12, by: CH - bh - 12, bw, bh };
+}
+function getJoyLayout() {
+  const r = joy.radius;
+  return { cx: CW - r - 16, cy: CH - r - 20 };
+}
+
+// ── INIT ────────────────────────────────────────────────────
 function initGame() {
-  riverLeft  = CW * (1 - RIVER_WIDTH_FRAC) / 2;
+  riverLeft  = CW * (1 - RIVER_FRAC) / 2;
   riverRight = CW - riverLeft;
 
   player = {
     x: CW / 2,
-    y: CH - 130,
-    hp: 3,
-    maxHp: 3,
-    vx: 0,
-    weapon: { ...WEAPONS.bare },
-    shield: null,
-    blocking: false,
-    flashTimer: 0,
-    attackTimer: 0,
-    attackAnim: 0,
-    hitCooldown: 0,
-    w: 40,
-    h: 40,
+    y: CH * 0.75,
+    hp: 3, maxHp: 3,
+    w: 40, h: 40,
+    hitCooldown: 0, flashTimer: 0,
   };
 
   enemies     = [];
-  items       = [];
+  coins       = [];
   particles   = [];
   projectiles = [];
-  coins       = [];
 
   distance       = 0;
   speed          = BASE_SPEED;
+  bgScroll       = 0;
   spawnTimer     = 80;
-  itemSpawnTimer = 150;
-  coinSpawnTimer = 60;
-  monstersKilled = 0;
-  bestWeapon     = '裸钳';
-  score          = 0;
-  coinsCollected = 0;
-  bossNext      = 500;
-  invincibleTimer = 0;
-  freezeTimer   = 0;
-  shakeTimer    = 0;
-  darkOverlay   = 0;
-  bgScroll      = 0;
+  coinSpawnTimer = 50;
+  monstersAvoided = 0;
+  coinsCollected  = 0;
+  bossNext        = 500;
+  shakeTimer      = 0;
+  darkOverlay     = 0;
+  freezeTimer     = 0;
+
+  shieldCharges = 0;
+  healCharges   = 0;
+  shieldActive  = false;
+  shieldTimer   = 0;
+  nextShieldMilestone = SHIELD_DIST;
+  nextHealMilestone   = HEAL_DIST;
+  skillFlash    = null;
 }
 
-// ---- PARTICLES ----
-function spawnParticles(x, y, color, count, emoji) {
-  for (let i = 0; i < count; i++) {
+// ── PARTICLES ───────────────────────────────────────────────
+function burst(x, y, color, n, emoji) {
+  for (let i = 0; i < n; i++) {
     particles.push({
       x, y,
-      vx: (Math.random() - 0.5) * 5,
-      vy: (Math.random() - 0.5) * 5,
-      life: 30 + Math.random() * 20,
-      maxLife: 50,
-      color: color || '#ff6600',
-      emoji: emoji || null,
-      size: emoji ? 18 : (3 + Math.random() * 5),
+      vx: (Math.random()-0.5)*6, vy: (Math.random()-0.5)*6,
+      life: 30+Math.random()*20, maxLife: 50,
+      color: color||'#ff6600', emoji: emoji||null,
+      size: emoji ? 16 : (3+Math.random()*4),
     });
   }
 }
 
-// ---- SPAWN ENEMY ----
+// ── SPAWN ENEMY ─────────────────────────────────────────────
 function spawnEnemy() {
   const d = distance;
-
-  if (d >= bossNext) {
-    spawnBoss();
-    bossNext += 500;
-    return;
-  }
+  if (d >= bossNext) { spawnBoss(); bossNext += 500; return; }
 
   let pool;
-  if (d < 200)       pool = ['worm','worm','worm'];
-  else if (d < 500)  pool = ['worm','worm','crab'];
-  else if (d < 700)  pool = ['worm','crab','frog','frog'];
-  else if (d < 1000) pool = ['crab','frog','frog','octopus'];
-  else if (d < 1500) pool = ['crab','frog','scorpion','octopus','octopus'];
-  else               pool = ['frog','scorpion','octopus','lizard','lizard'];
+  if (d < 100)       pool = ['worm','worm','worm'];
+  else if (d < 200)  pool = ['worm','worm','crab'];
+  else if (d < 400)  pool = ['worm','crab','scorpion'];
+  else if (d < 700)  pool = ['crab','frog','scorpion','octopus'];
+  else if (d < 1200) pool = ['frog','scorpion','octopus','octopus'];
+  else               pool = ['scorpion','octopus','lizard','lizard'];
 
-  const key  = pool[Math.floor(Math.random() * pool.length)];
+  const key  = pool[Math.floor(Math.random()*pool.length)];
   const type = MONSTER_TYPES[key];
-  const spd  = type.speed * (1 + d / 2000);
-
-  // Random X within river bounds
+  const spd  = type.spd * (1 + d/2500);
   const margin = 24;
-  const ex = riverLeft + margin + Math.random() * (riverRight - riverLeft - margin * 2);
+  const ex = riverLeft + margin + Math.random()*(riverRight - riverLeft - margin*2);
 
   enemies.push({
-    x: ex,
-    y: -50,
-    hp: type.hp,
-    maxHp: type.hp,
-    type,
-    speed: spd,
-    flashTimer: 0,
-    w: 36, h: 36,
-    shield: type.shield ? 2 : 0,
+    x: ex, y: -50,
+    hp: type.hp, maxHp: type.hp,
+    type, speed: spd,
+    flashTimer: 0, w: 34, h: 34,
     knockbackVy: 0,
-    shootTimer: type.ranged ? (80 + Math.random() * 40) : 0,
-    attackTimer: 0,
-    wobble: Math.random() * Math.PI * 2,
-    wobbleSpeed: 0.03 + Math.random() * 0.03,
-    lane: Math.floor(Math.random() * LANE_COUNT),
+    wobble: Math.random()*Math.PI*2,
+    wobbleSpd: 0.03+Math.random()*0.03,
+    shootTimer: type.ranged ? (type.shootCd + Math.random()*40) : 0,
+    jumpTimer: 0,
   });
 }
 
 function spawnBoss() {
-  const type  = MONSTER_TYPES.boss;
-  const extra = Math.floor(distance / 500);
+  const type = MONSTER_TYPES.boss;
+  const extra = Math.floor(distance/500);
   enemies.push({
-    x: CW / 2,
-    y: -80,
-    hp: type.hp + extra,
-    maxHp: type.hp + extra,
-    type,
-    speed: type.speed,
-    flashTimer: 0,
-    w: 56, h: 56,
-    shield: 0,
-    knockbackVy: 0,
-    shootTimer: 60,
-    attackTimer: 0,
-    wobble: 0,
-    wobbleSpeed: 0.02,
-    lane: 1,
-    boss: true,
+    x: CW/2, y: -80,
+    hp: type.hp+extra, maxHp: type.hp+extra,
+    type, speed: type.spd,
+    flashTimer: 0, w: 56, h: 56,
+    knockbackVy: 0, wobble: 0, wobbleSpd: 0.015,
+    shootTimer: type.shootCd, jumpTimer: 0,
   });
 }
 
-// ---- SPAWN COIN ----
+// ── SPAWN COIN ──────────────────────────────────────────────
 function spawnCoin() {
   const margin = 20;
-  const cx = riverLeft + margin + Math.random() * (riverRight - riverLeft - margin * 2);
-  coins.push({
-    x: cx,
-    y: -30,
-    vy: 2.5 + Math.random() * 1.5,
-    bobOffset: Math.random() * Math.PI * 2,
-    collected: false,
-    spin: Math.random() * Math.PI * 2,
-  });
+  const cx = riverLeft + margin + Math.random()*(riverRight - riverLeft - margin*2);
+  coins.push({ x: cx, y: -30, vy: 2.2+Math.random()*1.5, spin: 0, collected: false });
 }
 
-// ---- SPAWN ITEM ----
-function spawnItem() {
-  const item = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
-  const margin = 20;
-  const ix = riverLeft + margin + Math.random() * (riverRight - riverLeft - margin * 2);
-  items.push({
-    x: ix,
-    y: -40,
-    type: item,
-    bobOffset: Math.random() * Math.PI * 2,
-    collected: false,
-    vy: 2 + Math.random() * 1.5,
-  });
+// ── SKILLS ──────────────────────────────────────────────────
+function useShield() {
+  if (shieldCharges <= 0 || shieldActive) return;
+  shieldCharges--;
+  shieldActive = true;
+  shieldTimer  = 180; // 3s at 60fps
+  skillFlash   = { text:'🛡️ 护盾激活！', timer:80, color:'#aaddff' };
+  burst(player.x, player.y, '#aaddff', 10, '⭐');
 }
 
-// ---- ATTACK ----
-function doAttack() {
-  if (player.attackTimer > 0) return;
-  player.attackTimer = 20;
-  player.attackAnim  = 15;
-
-  const w      = player.weapon;
-  const atk    = w.atk;
-  const isArea = w.area;
-  const rangeX = isArea ? 100 : 60;
-  const rangeY = isArea ? 120 : 90;
-  const kb     = w.knockback || 0;
-
-  if (w === WEAPONS.chili || (w.name && w.name.includes('炸弹'))) {
-    spawnParticles(player.x, player.y - 40, '#ff4400', 15, '🔥');
-    shakeTimer = 20;
-  }
-
-  let hit = false;
-  enemies.forEach(e => {
-    if (e.hp <= 0) return;
-    const dx = Math.abs(e.x - player.x);
-    const dy = player.y - e.y; // positive = enemy is above player
-    if (dx < rangeX && dy > -20 && dy < rangeY) {
-      const dmg = freezeTimer > 0 ? atk * 2 : atk;
-      if (e.shield > 0 && atk < 4) {
-        e.shield--;
-        e.flashTimer = 8;
-        spawnParticles(e.x, e.y, '#aaaaff', 5);
-        return;
-      }
-      e.hp -= dmg;
-      e.flashTimer = 10;
-      e.knockbackVy = -(kb + 4);
-      hit = true;
-      spawnParticles(e.x, e.y, '#ff6600', 6);
-      if (e.hp <= 0) killEnemy(e);
-    }
-  });
-
-  if (hit && atk > 1) bestWeapon = w.name;
-
-  if (w.uses !== Infinity) {
-    w.uses--;
-    if (w.uses <= 0) player.weapon = { ...WEAPONS.bare };
-  }
+function useHeal() {
+  if (healCharges <= 0 || player.hp >= player.maxHp) return;
+  healCharges--;
+  player.hp++;
+  skillFlash = { text:'❤️ 回血+1', timer:80, color:'#ff88aa' };
+  burst(player.x, player.y, '#ff4466', 8, '❤️');
 }
 
-function killEnemy(e) {
-  monstersKilled++;
-  score += e.type.reward;
-  spawnParticles(e.x, e.y, '#ffff00', 10, e.type.emoji);
-  e.hp = -999;
+// ── DAMAGE PLAYER ───────────────────────────────────────────
+function damagePlayer() {
+  if (shieldActive || player.hitCooldown > 0) return;
+  player.hp--;
+  player.flashTimer  = 30;
+  player.hitCooldown = 90;
+  shakeTimer = 14;
+  burst(player.x, player.y, '#ff0000', 10);
+  if (player.hp <= 0) endGame();
 }
 
-// ---- BLOCK ----
-function startBlock() { player.blocking = true; }
-function endBlock()   { player.blocking = false; }
-
-// ---- COLLECT ITEM ----
-function tryCollect(item) {
-  item.collected = true;
-  const id = item.type.id;
-  if (id === 'garlic') {
-    player.hp = Math.min(player.maxHp, player.hp + 1);
-    spawnParticles(player.x, player.y - 30, '#88ff88', 8, '🧄');
-  } else if (id === 'beer') {
-    invincibleTimer = 180;
-    spawnParticles(player.x, player.y - 30, '#ffdd44', 8, '⭐');
-  } else if (id === 'ice') {
-    freezeTimer = 120;
-    spawnParticles(player.x, player.y - 30, '#aaddff', 10, '❄️');
-  } else if (id === 'shield') {
-    player.shield = { hp: 3, maxHp: 3 };
-    spawnParticles(player.x, player.y - 30, '#aaaaff', 8, '🛡️');
-  } else {
-    const wmap = { bayonet:'bayonet', fork:'fork', hammer:'hammer', chili:'chili' };
-    if (wmap[id]) {
-      player.weapon = { ...WEAPONS[wmap[id]] };
-      spawnParticles(player.x, player.y - 30, '#ffaa00', 8, WEAPONS[wmap[id]].emoji);
-    }
-  }
-}
-
-// ---- DAMAGE PLAYER ----
-function damagePlayer(dmg) {
-  if (invincibleTimer > 0 || player.hitCooldown > 0) return;
-
-  if (player.blocking && player.shield) {
-    player.shield.hp -= 1;
-    spawnParticles(player.x, player.y, '#aaaaff', 6, '🛡️');
-    if (player.shield.hp <= 0) player.shield = null;
-    player.hitCooldown = 30;
-    return;
-  }
-
-  player.hp -= dmg;
-  player.flashTimer = 20;
-  player.hitCooldown = 60;
-  shakeTimer = 12;
-  spawnParticles(player.x, player.y, '#ff0000', 8);
-}
-
-// ---- END GAME ----
+// ── END GAME ────────────────────────────────────────────────
 function endGame() {
   state = 'dead';
-  if (Math.floor(distance) > bestDist) {
-    bestDist = Math.floor(distance);
-    localStorage.setItem('lobster_best', bestDist);
-  }
+  const d = Math.floor(distance);
+  if (d > bestDist) { bestDist = d; localStorage.setItem('ldx_best', d); }
   totalCoins += coinsCollected;
-  localStorage.setItem('lobster_coins', totalCoins);
+  localStorage.setItem('ldx_coins', totalCoins);
 }
 
-// ---- UPDATE ----
+// ── UPDATE ──────────────────────────────────────────────────
 function update() {
   if (state !== 'play') return;
 
-  // Speed curve
-  speed = Math.min(BASE_SPEED + distance / 300, 9);
-  distance += speed / 60 * 3;
-  bgScroll = (bgScroll + speed) % (CH * 2);
-
-  darkOverlay = distance > 2000 ? Math.min(0.35, (distance - 2000) / 2000) : 0;
+  speed    = Math.min(BASE_SPEED + distance/300, 9);
+  distance += speed/60*3;
+  bgScroll  = (bgScroll + speed) % (CH*2);
+  darkOverlay = distance > 2000 ? Math.min(0.38, (distance-2000)/2000) : 0;
 
   if (shakeTimer > 0) shakeTimer--;
-  if (invincibleTimer > 0) invincibleTimer--;
-  if (freezeTimer > 0) freezeTimer--;
-  if (player.attackTimer > 0) player.attackTimer--;
-  if (player.attackAnim > 0) player.attackAnim--;
   if (player.flashTimer > 0) player.flashTimer--;
   if (player.hitCooldown > 0) player.hitCooldown--;
+  if (freezeTimer > 0) freezeTimer--;
+  if (skillFlash && --skillFlash.timer <= 0) skillFlash = null;
 
-  // ---- PLAYER MOVEMENT (left/right only) ----
-  const joyMoveSpeed = speed * 1.4;
-  player.vx = joystick.dx * joyMoveSpeed * 3.5;
+  // Shield timer
+  if (shieldActive) {
+    shieldTimer--;
+    if (shieldTimer <= 0) { shieldActive = false; }
+  }
 
-  // Keyboard fallback
-  if (keys['ArrowLeft']  || keys['KeyA']) player.vx = -joyMoveSpeed * 3;
-  if (keys['ArrowRight'] || keys['KeyD']) player.vx =  joyMoveSpeed * 3;
+  // Milestone rewards
+  while (distance >= nextShieldMilestone) {
+    if (shieldCharges < MAX_SHIELD_CHARGES) {
+      shieldCharges++;
+      skillFlash = { text:`🛡️ +1 护盾技能 (${shieldCharges}/${MAX_SHIELD_CHARGES})`, timer:100, color:'#aaddff' };
+    }
+    nextShieldMilestone += SHIELD_DIST;
+  }
+  while (distance >= nextHealMilestone) {
+    if (healCharges < MAX_HEAL_CHARGES) {
+      healCharges++;
+      skillFlash = { text:`❤️ +1 回血技能 (${healCharges}/${MAX_HEAL_CHARGES})`, timer:100, color:'#ffaacc' };
+    }
+    nextHealMilestone += HEAL_DIST;
+  }
 
-  player.x += player.vx;
+  // ── Player movement (right joystick, full 2D) ──
+  const moveSpd = 5 + speed * 0.4;
+  let vx = joy.dx * moveSpd;
+  let vy = joy.dy * moveSpd;
+  if (keys['ArrowLeft']  || keys['KeyA']) vx = -moveSpd;
+  if (keys['ArrowRight'] || keys['KeyD']) vx =  moveSpd;
+  if (keys['ArrowUp']    || keys['KeyW']) vy = -moveSpd;
+  if (keys['ArrowDown']  || keys['KeyS']) vy =  moveSpd;
+  player.x = Math.max(riverLeft  + player.w/2, Math.min(riverRight - player.w/2, player.x + vx));
+  player.y = Math.max(CH * PLAYER_Y_MIN_FRAC,  Math.min(CH * PLAYER_Y_MAX_FRAC,  player.y + vy));
 
-  // Clamp within river
-  const margin = player.w / 2 + 2;
-  player.x = Math.max(riverLeft + margin, Math.min(riverRight - margin, player.x));
-
-  // ---- SPAWN ----
+  // ── Spawn ──
   spawnTimer--;
-  const spawnRate = Math.max(18, 90 - distance / 15);
-  if (spawnTimer <= 0) {
-    spawnEnemy();
-    spawnTimer = spawnRate + Math.random() * 30;
-  }
-
-  itemSpawnTimer--;
-  if (itemSpawnTimer <= 0) {
-    spawnItem();
-    itemSpawnTimer = 200 + Math.random() * 200;
-  }
+  const rate = Math.max(16, 90 - distance/15);
+  if (spawnTimer <= 0) { spawnEnemy(); spawnTimer = rate + Math.random()*25; }
 
   coinSpawnTimer--;
   if (coinSpawnTimer <= 0) {
-    const count = Math.random() < 0.3 ? 3 : 1; // 30% chance coin cluster
-    for (let i = 0; i < count; i++) spawnCoin();
-    coinSpawnTimer = 40 + Math.random() * 50;
+    const n = Math.random() < 0.35 ? 3 : 1;
+    for (let i=0;i<n;i++) spawnCoin();
+    coinSpawnTimer = 35 + Math.random()*45;
   }
 
-  // ---- UPDATE ENEMIES ----
+  // ── Update enemies ──
   const frozen = freezeTimer > 0;
   enemies.forEach(e => {
     if (e.hp < 0) return;
     if (e.flashTimer > 0) e.flashTimer--;
-
-    // Wobble horizontally as they descend
-    e.wobble += e.wobbleSpeed;
-    if (!frozen) {
-      e.y += e.speed + speed * 0.15;
-      e.x += Math.sin(e.wobble) * 0.8;
-    }
-
-    // Knockback (upward bounce)
     if (e.knockbackVy !== 0) {
       e.y += e.knockbackVy;
       e.knockbackVy *= 0.75;
       if (Math.abs(e.knockbackVy) < 0.3) e.knockbackVy = 0;
     }
 
-    // Clamp to river horizontally
-    const em = e.w / 2;
-    e.x = Math.max(riverLeft + em, Math.min(riverRight - em, e.x));
+    if (!frozen) {
+      e.wobble += e.wobbleSpd;
+      if (e.type.homing) {
+        // slowly track player horizontally
+        const dx = player.x - e.x;
+        e.x += Math.sign(dx) * Math.min(Math.abs(dx)*0.02+0.3, 1.5);
+      } else {
+        e.x += Math.sin(e.wobble) * 0.9;
+      }
+      if (e.type.jumpy) {
+        e.jumpTimer = (e.jumpTimer||0) + 1;
+        e.y += e.speed * (1 + Math.abs(Math.sin(e.wobble*2))*1.5) + speed*0.12;
+      } else {
+        e.y += e.speed + speed * 0.12;
+      }
+    }
 
-    // Ranged attack
+    // clamp to river
+    const em = e.w/2;
+    e.x = Math.max(riverLeft+em, Math.min(riverRight-em, e.x));
+
+    // ranged attack
     if (e.type.ranged && !frozen) {
       e.shootTimer--;
       if (e.shootTimer <= 0) {
-        const dx = player.x - e.x;
-        const dy = player.y - e.y;
-        const dist2 = Math.sqrt(dx*dx + dy*dy) || 1;
-        const projSpeed = e.boss ? 4 : (e.type.name === '壁虎' ? 5 : 3);
-        const projEmoji = e.type.projEmoji || '💥';
-
-        if (e.type.spreadShot) {
-          // 章鱼: 3-way spread shot
-          [-0.3, 0, 0.3].forEach(angle => {
-            const cos = Math.cos(angle), sin = Math.sin(angle);
-            const nvx = (dx / dist2) * projSpeed * cos - (dy / dist2) * projSpeed * sin;
-            const nvy = (dx / dist2) * projSpeed * sin + (dy / dist2) * projSpeed * cos;
-            projectiles.push({ x: e.x, y: e.y, vx: nvx, vy: nvy, life: 90, fromEnemy: true, emoji: projEmoji });
-          });
-        } else {
-          projectiles.push({
-            x: e.x, y: e.y,
-            vx: (dx / dist2) * projSpeed,
-            vy: (dy / dist2) * projSpeed,
-            life: 90,
-            fromEnemy: true,
-            emoji: projEmoji,
-          });
-        }
-        e.shootTimer = e.boss ? 55 : (e.type.name === '壁虎' ? 50 : (80 + Math.random() * 40));
+        fireAt(e, player.x, player.y);
+        e.shootTimer = e.type.shootCd + Math.random()*30;
       }
     }
 
-    // Melee: enemy reaches player row
-    const dy = Math.abs(e.y - player.y);
-    const dx = Math.abs(e.x - player.x);
-    if (dy < 36 && dx < 36) {
-      e.attackTimer = (e.attackTimer || 0) + 1;
-      if (e.attackTimer > 40) {
-        e.attackTimer = 0;
-        damagePlayer(e.boss ? 2 : 1);
-      }
+    // melee collision
+    if (!frozen) {
+      const dx = Math.abs(e.x - player.x), dy = Math.abs(e.y - player.y);
+      if (dx < 28 && dy < 28) damagePlayer();
     }
 
-    // Off top or bottom
-    if (e.y > CH + 60) e.hp = -999;
+    if (e.y > CH + 60) { e.hp = -999; monstersAvoided++; }
   });
-
-  // ---- UPDATE PROJECTILES ----
-  projectiles.forEach(p => {
-    p.x += p.vx;
-    p.y += p.vy;
-    p.life--;
-
-    if (p.fromEnemy) {
-      const dx = Math.abs(p.x - player.x);
-      const dy = Math.abs(p.y - player.y);
-      if (dx < 24 && dy < 24) {
-        damagePlayer(1);
-        p.life = 0;
-      }
-    }
-  });
-  projectiles = projectiles.filter(p => p.life > 0 && p.y < CH + 20 && p.y > -20);
-
-  // ---- UPDATE ITEMS ----
-  items.forEach(item => {
-    item.y += item.vy;
-    if (!item.collected) {
-      const dx = Math.abs(item.x - player.x);
-      const dy = Math.abs(item.y - player.y);
-      if (dx < 30 && dy < 30) tryCollect(item);
-    }
-  });
-  items = items.filter(i => !i.collected && i.y < CH + 40);
-
-  // ---- UPDATE COINS ----
-  coins.forEach(coin => {
-    coin.y += coin.vy;
-    coin.spin += 0.1;
-    if (!coin.collected) {
-      const dx = Math.abs(coin.x - player.x);
-      const dy = Math.abs(coin.y - player.y);
-      if (dx < 26 && dy < 26) {
-        coin.collected = true;
-        coinsCollected++;
-        score += 5;
-        spawnParticles(coin.x, coin.y, '#FFD700', 5);
-      }
-    }
-  });
-  coins = coins.filter(c => !c.collected && c.y < CH + 40);
-
-  // ---- UPDATE PARTICLES ----
-  particles.forEach(p => {
-    p.x += p.vx;
-    p.y += p.vy;
-    p.vy += 0.08;
-    p.life--;
-  });
-  particles = particles.filter(p => p.life > 0);
-
   enemies = enemies.filter(e => e.hp > -100);
 
-  if (player.hp <= 0) endGame();
+  // ── Update projectiles ──
+  projectiles.forEach(p => {
+    p.x += p.vx; p.y += p.vy; p.life--;
+    const dx = Math.abs(p.x - player.x), dy = Math.abs(p.y - player.y);
+    if (dx < 22 && dy < 22) { damagePlayer(); p.life = 0; }
+  });
+  projectiles = projectiles.filter(p => p.life > 0 && p.y < CH+30 && p.y > -30 && p.x > -30 && p.x < CW+30);
+
+  // ── Update coins ──
+  coins.forEach(c => {
+    c.y += c.vy; c.spin += 0.1;
+    if (!c.collected) {
+      const dx = Math.abs(c.x-player.x), dy = Math.abs(c.y-player.y);
+      if (dx < 26 && dy < 26) { c.collected = true; coinsCollected++; burst(c.x, c.y, '#FFD700', 4); }
+    }
+  });
+  coins = coins.filter(c => !c.collected && c.y < CH+40);
+
+  // ── Update particles ──
+  particles.forEach(p => { p.x+=p.vx; p.y+=p.vy; p.vy+=0.08; p.life--; });
+  particles = particles.filter(p => p.life > 0);
 }
 
-// ---- DRAW HELPERS ----
-function roundRect(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
+function fireAt(e, tx, ty) {
+  const dx = tx - e.x, dy = ty - e.y;
+  const dist = Math.sqrt(dx*dx+dy*dy)||1;
+  const spd  = e.type.fast ? 5 : 3.2;
+  const em   = e.type.projEmoji || '💥';
+  const base  = { x:e.x, y:e.y, vx:(dx/dist)*spd, vy:(dy/dist)*spd, life:100, emoji:em };
+  projectiles.push({...base});
+  if (e.type.spread) {
+    [-0.35, 0.35].forEach(a => {
+      const cos=Math.cos(a), sin=Math.sin(a);
+      projectiles.push({ x:e.x, y:e.y,
+        vx: base.vx*cos - base.vy*sin,
+        vy: base.vx*sin + base.vy*cos,
+        life:100, emoji:em });
+    });
+  }
+  if (e.type.boss) {
+    // boss fires 4 directions
+    [[1,0],[-1,0],[0,-1]].forEach(([bx,by])=>{
+      projectiles.push({ x:e.x, y:e.y, vx:bx*3, vy:by*3+1.5, life:80, emoji:em });
+    });
+  }
 }
 
-// ---- DRAW ----
+// ── DRAW ────────────────────────────────────────────────────
 function draw() {
-  const shakeX = shakeTimer > 0 ? (Math.random() - 0.5) * 6 : 0;
-  const shakeY = shakeTimer > 0 ? (Math.random() - 0.5) * 4 : 0;
+  const sx = shakeTimer>0?(Math.random()-0.5)*6:0;
+  const sy = shakeTimer>0?(Math.random()-0.5)*4:0;
   ctx.save();
-  ctx.translate(shakeX, shakeY);
+  ctx.translate(sx, sy);
 
-  drawBackground();
-  drawCoins();
-  items.forEach(drawItem);
-  drawParticles(false);
+  drawBg();
+  coins.forEach(drawCoin);
   enemies.forEach(drawEnemy);
   drawPlayer();
-  projectiles.forEach(drawProjectile);
-  drawParticles(true);
+  projectiles.forEach(drawProj);
+  drawParticles();
 
-  // Dark night overlay
-  if (darkOverlay > 0) {
-    ctx.fillStyle = `rgba(0,0,0,${darkOverlay})`;
-    ctx.fillRect(0, 0, CW, CH);
-  }
-  // Freeze tint
-  if (freezeTimer > 0) {
-    ctx.fillStyle = `rgba(150,220,255,${0.18 * (freezeTimer / 120)})`;
-    ctx.fillRect(0, 0, CW, CH);
-  }
+  if (darkOverlay>0) { ctx.fillStyle=`rgba(0,0,0,${darkOverlay})`; ctx.fillRect(0,0,CW,CH); }
+  if (freezeTimer>0) { ctx.fillStyle=`rgba(150,220,255,${0.18*(freezeTimer/120)})`; ctx.fillRect(0,0,CW,CH); }
 
   ctx.restore();
 
   drawHUD();
   drawControls();
-  if (state === 'menu') drawMenu();
-  if (state === 'dead')  drawDeath();
+  if (state==='menu') drawMenu();
+  if (state==='dead')  drawDead();
 }
 
-// ---- BACKGROUND (top-down river/road scrolling downward) ----
-function drawBackground() {
-  const rl = riverLeft, rr = riverRight, rw = rr - rl;
+// ── BACKGROUND ──────────────────────────────────────────────
+function drawBg() {
+  const rl=riverLeft, rr=riverRight, rw=rr-rl;
 
-  // Grass / bank sides
-  const leftGrad = ctx.createLinearGradient(0, 0, rl, 0);
-  leftGrad.addColorStop(0, '#2d5a1b');
-  leftGrad.addColorStop(1, '#3a7a28');
-  ctx.fillStyle = leftGrad;
-  ctx.fillRect(0, 0, rl, CH);
+  // grass banks
+  const lg=ctx.createLinearGradient(0,0,rl,0);
+  lg.addColorStop(0,'#2d5a1b'); lg.addColorStop(1,'#3a7a28');
+  ctx.fillStyle=lg; ctx.fillRect(0,0,rl,CH);
+  const rg=ctx.createLinearGradient(rr,0,CW,0);
+  rg.addColorStop(0,'#3a7a28'); rg.addColorStop(1,'#2d5a1b');
+  ctx.fillStyle=rg; ctx.fillRect(rr,0,CW-rr,CH);
 
-  const rightGrad = ctx.createLinearGradient(rr, 0, CW, 0);
-  rightGrad.addColorStop(0, '#3a7a28');
-  rightGrad.addColorStop(1, '#2d5a1b');
-  ctx.fillStyle = rightGrad;
-  ctx.fillRect(rr, 0, CW - rr, CH);
+  // grass dots
+  ctx.fillStyle='rgba(60,120,40,0.5)';
+  const gs=22, go=bgScroll%gs;
+  for(let y=-go;y<CH+gs;y+=gs)
+    for(let x=4;x<rl-4;x+=gs) { ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill(); }
+  for(let y=-go;y<CH+gs;y+=gs)
+    for(let x=rr+4;x<CW-4;x+=gs) { ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill(); }
 
-  // Scrolling grass texture (dots)
-  ctx.fillStyle = 'rgba(60,120,40,0.5)';
-  const gSpacing = 22;
-  const gOff = bgScroll % gSpacing;
-  for (let y = -gOff; y < CH + gSpacing; y += gSpacing) {
-    for (let x = 4; x < rl - 4; x += gSpacing) {
-      ctx.beginPath();
-      ctx.arc(x + (y % (gSpacing * 2) === 0 ? 6 : 0), y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    for (let x = rr + 4; x < CW - 4; x += gSpacing) {
-      ctx.beginPath();
-      ctx.arc(x + (y % (gSpacing * 2) === 0 ? 6 : 0), y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  // river
+  const rv=ctx.createLinearGradient(rl,0,rr,0);
+  rv.addColorStop(0,'#1a4a8a'); rv.addColorStop(0.5,'#1e5599'); rv.addColorStop(1,'#1a4a8a');
+  ctx.fillStyle=rv; ctx.fillRect(rl,0,rw,CH);
+
+  // ripples
+  ctx.strokeStyle='rgba(100,180,255,0.22)'; ctx.lineWidth=1.5;
+  const rsp=40, ro=bgScroll%rsp;
+  for(let y=-ro;y<CH+rsp;y+=rsp) {
+    ctx.beginPath(); ctx.moveTo(rl+8,y); ctx.lineTo(rr-8,y); ctx.stroke();
   }
 
-  // River/road base
-  const riverGrad = ctx.createLinearGradient(rl, 0, rr, 0);
-  riverGrad.addColorStop(0,   '#1a4a8a');
-  riverGrad.addColorStop(0.5, '#1e5599');
-  riverGrad.addColorStop(1,   '#1a4a8a');
-  ctx.fillStyle = riverGrad;
-  ctx.fillRect(rl, 0, rw, CH);
-
-  // Scrolling water ripple lines
-  ctx.strokeStyle = 'rgba(100,180,255,0.25)';
-  ctx.lineWidth = 1.5;
-  const rippleSpacing = 40;
-  const rippleOff = bgScroll % rippleSpacing;
-  for (let y = -rippleOff; y < CH + rippleSpacing; y += rippleSpacing) {
-    ctx.beginPath();
-    ctx.moveTo(rl + 8, y);
-    ctx.lineTo(rr - 8, y);
-    ctx.stroke();
-  }
-
-  // Lane dividers (dashed, scrolling)
-  const laneW = rw / LANE_COUNT;
-  ctx.strokeStyle = 'rgba(255,255,255,0.30)';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([28, 20]);
-  ctx.lineDashOffset = -(bgScroll % 48);
-  for (let l = 1; l < LANE_COUNT; l++) {
-    const lx = rl + laneW * l;
-    ctx.beginPath();
-    ctx.moveTo(lx, 0);
-    ctx.lineTo(lx, CH);
-    ctx.stroke();
+  // lane dividers
+  const lw=rw/LANE_COUNT;
+  ctx.strokeStyle='rgba(255,255,255,0.28)'; ctx.lineWidth=2;
+  ctx.setLineDash([28,20]); ctx.lineDashOffset=-(bgScroll%48);
+  for(let l=1;l<LANE_COUNT;l++) {
+    const lx=rl+lw*l; ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx,CH); ctx.stroke();
   }
   ctx.setLineDash([]);
 
-  // Bank borders (solid bright lines)
-  ctx.strokeStyle = 'rgba(80,200,100,0.7)';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(rl, 0); ctx.lineTo(rl, CH);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(rr, 0); ctx.lineTo(rr, CH);
-  ctx.stroke();
-
-  // Speed streaks
-  ctx.strokeStyle = 'rgba(100,200,255,0.12)';
-  ctx.lineWidth = 1;
-  const streakSpacing = 30;
-  const streakOff = (bgScroll * 2) % streakSpacing;
-  for (let y = -streakOff; y < CH; y += streakSpacing) {
-    const sx = rl + 10 + Math.random() * (rw - 20);
-    ctx.beginPath();
-    ctx.moveTo(sx, y);
-    ctx.lineTo(sx + 1, y + 18);
-    ctx.stroke();
-  }
+  // borders
+  ctx.strokeStyle='rgba(80,200,100,0.7)'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(rl,0); ctx.lineTo(rl,CH); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rr,0); ctx.lineTo(rr,CH); ctx.stroke();
 }
 
-function drawItem(item) {
-  if (item.collected) return;
-  const bob = Math.sin(Date.now() / 300 + item.bobOffset) * 3;
-  ctx.font = '24px serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(item.type.emoji, item.x, item.y + bob);
-
-  // Glow
-  ctx.strokeStyle = 'rgba(255,255,100,0.55)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.ellipse(item.x, item.y + 10, 14, 5, 0, 0, Math.PI * 2);
-  ctx.stroke();
+function drawCoin(c) {
+  if (c.collected) return;
+  const sx = Math.max(0.15, Math.abs(Math.cos(c.spin)));
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.scale(sx, 1);
+  ctx.font='20px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('🪙',0,0);
+  ctx.restore();
 }
 
 function drawEnemy(e) {
-  if (e.hp < 0) return;
+  if (e.hp<0) return;
   ctx.save();
-
-  if (e.flashTimer > 0 && Math.floor(e.flashTimer / 2) % 2 === 0) {
-    ctx.filter = 'brightness(3) saturate(0)';
-  }
-  if (freezeTimer > 0) ctx.filter = 'hue-rotate(180deg) brightness(1.5)';
-
-  const size = e.boss ? 50 : 30;
-  ctx.font = `${size}px serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  if (e.flashTimer>0 && Math.floor(e.flashTimer/2)%2===0) ctx.filter='brightness(3) saturate(0)';
+  if (freezeTimer>0) ctx.filter='hue-rotate(180deg) brightness(1.5)';
+  const sz = e.type.boss ? 50 : 28;
+  ctx.font=`${sz}px serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText(e.type.emoji, e.x, e.y);
-
   ctx.restore();
 
-  // Shield
-  if (e.shield > 0) {
-    ctx.font = '14px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🛡️', e.x + (e.boss ? 30 : 20), e.y - (e.boss ? 30 : 20));
-  }
-
   // HP bar
-  const bw = e.boss ? 58 : 34;
-  const bh = 5;
-  const bx = e.x - bw / 2;
-  const by = e.y - (e.boss ? 38 : 26);
-  ctx.fillStyle = '#222';
-  ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
-  ctx.fillStyle = e.boss ? '#ff2200' : '#22cc44';
-  ctx.fillRect(bx, by, bw * Math.max(0, e.hp / e.maxHp), bh);
+  const bw=e.type.boss?56:30, bh=4;
+  const bx=e.x-bw/2, by=e.y-(e.type.boss?38:22);
+  ctx.fillStyle='#222'; ctx.fillRect(bx-1,by-1,bw+2,bh+2);
+  ctx.fillStyle=e.type.boss?'#ff2200':'#22cc44';
+  ctx.fillRect(bx,by,bw*Math.max(0,e.hp/e.maxHp),bh);
 }
 
 function drawPlayer() {
   ctx.save();
+  const blink = shieldActive && Math.floor(Date.now()/80)%2===0;
+  if (blink) { ctx.globalAlpha=0.55; ctx.filter='brightness(2) hue-rotate(200deg)'; }
+  if (player.flashTimer>0 && Math.floor(player.flashTimer/3)%2===0) ctx.filter='brightness(3) saturate(0)';
+  if (player.hitCooldown>0 && !shieldActive && Math.floor(player.hitCooldown/8)%2===0) ctx.globalAlpha=0.5;
 
-  const invBlink = invincibleTimer > 0 && Math.floor(Date.now() / 100) % 2 === 0;
-  if (invBlink) ctx.globalAlpha = 0.45;
-  if (player.flashTimer > 0 && Math.floor(player.flashTimer / 3) % 2 === 0) {
-    ctx.filter = 'brightness(3) saturate(0)';
-  }
-
-  // Attack animation: claw snaps upward (offset emoji upward slightly)
-  const attackOffset = player.attackAnim > 0 ? -10 : 0;
-
-  ctx.font = '40px serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  // Rotate crayfish to face upward (top-down view, flip 180 so claws face up/enemy direction)
-  ctx.translate(player.x, player.y + attackOffset);
-  // No rotation needed - 🦞 faces right by default; we just center it top-down
-
-  ctx.fillText('🦞', 0, 0);
-
+  ctx.font='40px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('🦞', player.x, player.y);
   ctx.restore();
 
-  // Attack range flash
-  if (player.attackAnim > 0) {
-    const rangeX = player.weapon.area ? 100 : 60;
-    const rangeY = player.weapon.area ? 120 : 90;
-    ctx.strokeStyle = `rgba(255,200,0,${player.attackAnim / 15 * 0.6})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(player.x, player.y - rangeY / 2, rangeX, rangeY / 2, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  // Weapon indicator above player
-  if (player.weapon.emoji && player.weapon !== WEAPONS.bare) {
-    ctx.font = '16px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(player.weapon.emoji, player.x + 22, player.y - 26);
-  }
-
-  // Shield indicator
-  if (player.shield) {
-    ctx.font = '16px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🛡️', player.x - 22, player.y - 26);
-  }
-
-  // Invincible star
-  if (invincibleTimer > 0) {
-    ctx.font = '14px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('⭐', player.x, player.y - 42);
-  }
-}
-
-function drawProjectile(p) {
-  ctx.font = '16px serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(p.emoji || '💥', p.x, p.y);
-}
-
-function drawCoins() {
-  coins.forEach(coin => {
-    if (coin.collected) return;
-    // Scale to simulate spin (horizontal squish)
-    const scaleX = Math.abs(Math.cos(coin.spin));
+  // Shield bubble
+  if (shieldActive) {
     ctx.save();
-    ctx.translate(coin.x, coin.y);
-    ctx.scale(Math.max(0.15, scaleX), 1);
-    ctx.font = '20px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🪙', 0, 0);
+    ctx.strokeStyle=`rgba(100,180,255,${0.5+0.3*Math.sin(Date.now()/150)})`;
+    ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(player.x, player.y, 30, 0, Math.PI*2); ctx.stroke();
     ctx.restore();
-    // Glow
-    ctx.strokeStyle = 'rgba(255,215,0,0.4)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.ellipse(coin.x, coin.y + 10, 10, 4, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  });
+  }
 }
 
-function drawParticles(front) {
+function drawProj(p) {
+  ctx.font='15px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(p.emoji||'💥', p.x, p.y);
+}
+
+function drawParticles() {
   particles.forEach(p => {
-    const alpha = Math.max(0, p.life / p.maxLife);
+    const alpha = Math.max(0, p.life/p.maxLife);
+    ctx.globalAlpha = alpha;
     if (p.emoji) {
-      ctx.globalAlpha = alpha;
-      ctx.font = `${p.size}px serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      ctx.font=`${p.size}px serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.fillText(p.emoji, p.x, p.y);
-      ctx.globalAlpha = 1;
-    } else if (front) {
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(p.x,p.y,p.size/2,0,Math.PI*2); ctx.fill();
     }
+    ctx.globalAlpha=1;
   });
 }
 
-// ---- HUD ----
+// ── HUD ─────────────────────────────────────────────────────
 function drawHUD() {
-  if (state === 'menu') return;
+  if (state==='menu') return;
 
-  // Top HUD bar
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, 0, CW, 54);
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,CW,52);
 
   // Distance
-  ctx.font = 'bold 18px sans-serif';
-  ctx.fillStyle = '#FFD700';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillText(`🏊 ${Math.floor(distance)}m`, CW / 2, 7);
-
-  ctx.font = '12px sans-serif';
-  ctx.fillStyle = '#aaddff';
-  ctx.fillText(`最远: ${bestDist}m`, CW / 2, 30);
+  ctx.font='bold 18px sans-serif'; ctx.fillStyle='#FFD700';
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  ctx.fillText(`🏊 ${Math.floor(distance)}m`, CW/2, 6);
+  ctx.font='12px sans-serif'; ctx.fillStyle='#aaddff';
+  ctx.fillText(`最远: ${bestDist}m`, CW/2, 28);
 
   // HP
-  ctx.font = '22px serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  for (let i = 0; i < player.maxHp; i++) {
-    ctx.fillText(i < player.hp ? '❤️' : '🖤', 7 + i * 28, 7);
+  ctx.font='22px serif'; ctx.textAlign='left'; ctx.textBaseline='top';
+  for(let i=0;i<player.maxHp;i++) ctx.fillText(i<player.hp?'❤️':'🖤', 7+i*28, 6);
+
+  // Coins top right
+  ctx.font='13px sans-serif'; ctx.fillStyle='#FFD700'; ctx.textAlign='right';
+  ctx.fillText(`🪙 ${coinsCollected}`, CW-7, 6);
+  ctx.font='11px sans-serif'; ctx.fillStyle='#aaaaaa';
+  ctx.fillText(`累计 ${totalCoins+coinsCollected}`, CW-7, 24);
+
+  // Shield timer bar
+  if (shieldActive) {
+    ctx.fillStyle='rgba(100,180,255,0.3)'; ctx.fillRect(riverLeft,52, (riverRight-riverLeft)*(shieldTimer/180), 4);
   }
 
-  // Shield pips
-  if (player.shield) {
-    ctx.font = '13px sans-serif';
-    ctx.fillStyle = '#aaaaff';
-    ctx.fillText('🛡️'.repeat(player.shield.hp), 7, 34);
+  // Skill flash
+  if (skillFlash) {
+    const alpha = Math.min(1, skillFlash.timer/30);
+    ctx.save(); ctx.globalAlpha=alpha;
+    ctx.font='bold 16px sans-serif'; ctx.fillStyle=skillFlash.color||'#ffffff';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(skillFlash.text, CW/2, CH*0.38);
+    ctx.restore();
   }
 
-  // Weapon + score (top right)
-  ctx.textAlign = 'right';
-  ctx.font = '13px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  const wUses = player.weapon.uses === Infinity ? '∞' : player.weapon.uses;
-  ctx.fillText(`${player.weapon.name} [${wUses}]`, CW - 7, 7);
-  ctx.font = '12px sans-serif';
-  ctx.fillStyle = '#ffdd88';
-  ctx.fillText(`💀${monstersKilled}  🪙${coinsCollected}`, CW - 7, 28);
-
-  // Freeze indicator
-  if (freezeTimer > 0) {
-    ctx.fillStyle = '#aaddff';
-    ctx.textAlign = 'center';
-    ctx.font = '13px sans-serif';
-    ctx.fillText(`❄️ 冰冻 ${Math.ceil(freezeTimer / 60)}s`, CW / 2, 42);
-  }
+  // Next milestone hints (small)
+  const toShield = Math.ceil(nextShieldMilestone - distance);
+  const toHeal   = Math.ceil(nextHealMilestone   - distance);
+  ctx.font='10px sans-serif'; ctx.fillStyle='rgba(200,200,200,0.7)'; ctx.textAlign='left';
+  if (shieldCharges < MAX_SHIELD_CHARGES) ctx.fillText(`🛡️ ${toShield}m`, 7, 40);
+  if (healCharges < MAX_HEAL_CHARGES)     ctx.fillText(`❤️ ${toHeal}m`, 55, 40);
 }
 
-// ---- CONTROLS: Joystick + Buttons ----
-function getJoystickLayout() {
-  const padRadius  = 52;
-  const padX = padRadius + 12;
-  const padY = CH - padRadius - 20;
-  return { padX, padY, padRadius };
-}
-
-function getAttackBtnLayout() {
-  const bw = 72, bh = 72;
-  const bx = CW - bw - 12;
-  const by = CH - bh - 20;
-  return { bx, by, bw, bh };
-}
-
-function getBlockBtnLayout() {
-  const bw = 60, bh = 44;
-  const bx = CW - bw - 18;
-  const by = CH - 72 - 44 - 14 - 20;
-  return { bx, by, bw, bh };
+// ── CONTROLS DRAW ───────────────────────────────────────────
+function rr(x,y,w,h,r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
 }
 
 function drawControls() {
-  if (state !== 'play') return;
-  const joy = getJoystickLayout();
-  const atk = getAttackBtnLayout();
-  const blk = getBlockBtnLayout();
+  if (state!=='play') return;
+  const s = getShieldBtnLayout();
+  const h = getHealBtnLayout();
+  const j = getJoyLayout();
 
-  // ---- Joystick base ----
+  // ── Shield button ──
   ctx.save();
-  ctx.globalAlpha = 0.45;
-  ctx.fillStyle = '#334455';
-  ctx.beginPath();
-  ctx.arc(joy.padX, joy.padY, joy.padRadius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(150,200,255,0.6)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  ctx.globalAlpha = shieldCharges>0 ? 0.9 : 0.4;
+  ctx.fillStyle = shieldActive ? '#00aaff' : (shieldCharges>0 ? '#1155cc' : '#222244');
+  rr(s.bx, s.by, s.bw, s.bh, 14); ctx.fill();
+  ctx.strokeStyle='rgba(100,180,255,0.7)'; ctx.lineWidth=2; ctx.stroke();
+  ctx.font='26px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('🛡️', s.bx+s.bw/2, s.by+s.bh/2-8);
+  ctx.font='bold 12px sans-serif'; ctx.fillStyle='#ffffff';
+  ctx.fillText(shieldActive ? `${Math.ceil(shieldTimer/60)}s` : `×${shieldCharges}`, s.bx+s.bw/2, s.by+s.bh/2+16);
+  ctx.globalAlpha=1; ctx.restore();
 
-  // Joystick direction hint (left/right arrows)
-  ctx.fillStyle = 'rgba(150,200,255,0.4)';
-  ctx.font = '14px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('◀  ▶', joy.padX, joy.padY);
-
-  ctx.globalAlpha = 1;
-  ctx.restore();
-
-  // ---- Joystick knob ----
-  const knobX = joy.padX + joystick.dx * joy.padRadius * 0.75;
-  const knobY = joy.padY;
-
+  // ── Heal button ──
   ctx.save();
-  ctx.globalAlpha = joystick.active ? 0.9 : 0.6;
-  ctx.fillStyle = '#4488cc';
-  ctx.beginPath();
-  ctx.arc(knobX, knobY, joystick.knobRadius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(180,220,255,0.8)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-  ctx.restore();
+  ctx.globalAlpha = healCharges>0 ? 0.9 : 0.4;
+  ctx.fillStyle = healCharges>0 ? '#882233' : '#221122';
+  rr(h.bx, h.by, h.bw, h.bh, 14); ctx.fill();
+  ctx.strokeStyle='rgba(255,120,150,0.7)'; ctx.lineWidth=2; ctx.stroke();
+  ctx.font='26px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('❤️', h.bx+h.bw/2, h.by+h.bh/2-8);
+  ctx.font='bold 12px sans-serif'; ctx.fillStyle='#ffffff';
+  ctx.fillText(`×${healCharges}`, h.bx+h.bw/2, h.by+h.bh/2+16);
+  ctx.globalAlpha=1; ctx.restore();
 
-  // ---- Attack button ----
+  // ── Joystick base ──
   ctx.save();
-  ctx.globalAlpha = btnAttack.pressed ? 1.0 : 0.78;
-  ctx.fillStyle = btnAttack.pressed ? '#ff3300' : '#cc2200';
-  roundRect(atk.bx, atk.by, atk.bw, atk.bh, 14);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,180,100,0.7)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.font = 'bold 16px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('攻击', atk.bx + atk.bw / 2, atk.by + atk.bh / 2);
-  ctx.font = '20px serif';
-  ctx.fillText('⚔️', atk.bx + atk.bw / 2, atk.by + atk.bh / 2 - 14);
-  ctx.globalAlpha = 1;
-  ctx.restore();
+  ctx.globalAlpha=0.45;
+  ctx.fillStyle='#334455';
+  ctx.beginPath(); ctx.arc(j.cx,j.cy,joy.radius,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(150,200,255,0.55)'; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle='rgba(150,200,255,0.3)'; ctx.font='13px sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('🕹️', j.cx, j.cy);
+  ctx.globalAlpha=1; ctx.restore();
 
-  // ---- Block button ----
+  // Knob
+  const kx = j.cx + joy.dx*joy.radius*0.75;
+  const ky = j.cy + joy.dy*joy.radius*0.75;
   ctx.save();
-  ctx.globalAlpha = btnBlock.pressed ? 1.0 : 0.72;
-  ctx.fillStyle = btnBlock.pressed ? '#2255ee' : '#1144cc';
-  roundRect(blk.bx, blk.by, blk.bw, blk.bh, 10);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(150,170,255,0.7)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.font = 'bold 14px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('格挡', blk.bx + blk.bw / 2, blk.by + blk.bh / 2);
-  ctx.globalAlpha = 1;
-  ctx.restore();
+  ctx.globalAlpha = joy.active ? 0.95 : 0.65;
+  ctx.fillStyle='#4488cc';
+  ctx.beginPath(); ctx.arc(kx,ky,joy.knobR,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(180,220,255,0.8)'; ctx.lineWidth=2; ctx.stroke();
+  ctx.globalAlpha=1; ctx.restore();
 }
 
-// ---- MENU ----
+// ── MENU ────────────────────────────────────────────────────
 function drawMenu() {
-  ctx.fillStyle = 'rgba(0,0,0,0.68)';
-  ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle='rgba(0,0,0,0.72)'; ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
 
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.font='60px serif'; ctx.fillText('🦞', CW/2, CH*0.15);
+  ctx.font='bold 26px sans-serif'; ctx.fillStyle='#FFD700';
+  ctx.fillText('小龙虾大逃亡', CW/2, CH*0.27);
 
-  ctx.font = '56px serif';
-  ctx.fillText('🦞', CW / 2, CH * 0.17);
+  ctx.font='14px sans-serif'; ctx.fillStyle='#ddffdd';
+  ctx.fillText('躲避所有怪物！收集金币！', CW/2, CH*0.36);
 
-  ctx.font = 'bold 28px sans-serif';
-  ctx.fillStyle = '#FFD700';
-  ctx.fillText('小龙虾大战', CW / 2, CH * 0.30);
-
-  ctx.font = '15px sans-serif';
-  ctx.fillStyle = '#ddffdd';
-  ctx.fillText('躲避敌人、拾取道具、消灭怪物！', CW / 2, CH * 0.40);
-
-  ctx.font = '13px sans-serif';
-  ctx.fillStyle = '#cccccc';
   const tips = [
-    '🕹️ 左侧摇杆：左右移动',
-    '⚔️ 攻击键：向上挥钳打怪',
-    '🛡️ 格挡键：减少伤害（需要盾）',
-    '🧄 拾取掉落道具加血/武器',
+    '🕹️ 右侧摇杆：全方向移动',
+    '🛡️ 左上按钮：激活护盾（每300m获得）',
+    '❤️ 左下按钮：回血+1（每800m获得）',
+    '🪙 跑过金币自动收集',
+    '⚠️ 三条命耗尽即死亡',
   ];
-  tips.forEach((t, i) => ctx.fillText(t, CW / 2, CH * 0.50 + i * 22));
+  ctx.font='12px sans-serif'; ctx.fillStyle='#cccccc';
+  tips.forEach((t,i)=>ctx.fillText(t, CW/2, CH*0.46+i*22));
 
-  if (bestDist > 0) {
-    ctx.font = '14px sans-serif';
-    ctx.fillStyle = '#aaddff';
-    ctx.fillText(`最远记录: ${bestDist}m`, CW / 2, CH * 0.72);
+  if (bestDist>0) {
+    ctx.font='13px sans-serif'; ctx.fillStyle='#aaddff';
+    ctx.fillText(`最远记录: ${bestDist}m`, CW/2, CH*0.72);
   }
+  ctx.font='12px sans-serif'; ctx.fillStyle='#FFD700';
+  ctx.fillText(`累计金币: 🪙${totalCoins}`, CW/2, CH*0.77);
 
-  // Start button
-  ctx.fillStyle = '#cc3300';
-  roundRect(CW / 2 - 82, CH * 0.79, 164, 54, 14);
-  ctx.fill();
-  ctx.font = 'bold 21px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('开始游戏 🦞', CW / 2, CH * 0.79 + 27);
+  ctx.fillStyle='#cc3300'; rr(CW/2-80,CH*0.83,160,52,14); ctx.fill();
+  ctx.font='bold 20px sans-serif'; ctx.fillStyle='#ffffff';
+  ctx.fillText('开始游戏 🦞', CW/2, CH*0.83+26);
 }
 
-// ---- DEATH SCREEN ----
-function drawDeath() {
-  ctx.fillStyle = 'rgba(0,0,0,0.78)';
-  ctx.fillRect(0, 0, CW, CH);
+// ── DEATH SCREEN ────────────────────────────────────────────
+function drawDead() {
+  ctx.fillStyle='rgba(0,0,0,0.80)'; ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
 
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.font='bold 30px sans-serif'; ctx.fillStyle='#FF4500';
+  ctx.fillText('💀 虾小弟阵亡！', CW/2, CH*0.15);
 
-  ctx.font = 'bold 32px sans-serif';
-  ctx.fillStyle = '#FF4500';
-  ctx.fillText('💀 阵亡！', CW / 2, CH * 0.16);
+  const px=CW*0.07, py=CH*0.23, pw=CW*0.86, ph=CH*0.48;
+  ctx.fillStyle='rgba(255,255,255,0.07)'; rr(px,py,pw,ph,16); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=2; ctx.stroke();
 
-  const panel = { x: CW * 0.07, y: CH * 0.25, w: CW * 0.86, h: CH * 0.44 };
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
-  roundRect(panel.x, panel.y, panel.w, panel.h, 16);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.font = '15px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  const rows = [
+  ctx.font='15px sans-serif'; ctx.fillStyle='#ffffff';
+  const rows=[
     `🏊 本次距离：${Math.floor(distance)}m`,
     `🏆 最远记录：${bestDist}m`,
-    `💀 击杀怪物：${monstersKilled}只`,
-    `🪙 本次金币：${coinsCollected}  累计：${totalCoins}`,
-    `⚔️ 最强武器：${bestWeapon}`,
+    `🪙 本次金币：${coinsCollected}`,
+    `🪙 累计金币：${totalCoins}`,
+    `👾 躲过怪物：${monstersAvoided}只`,
   ];
-  rows.forEach((r, i) => ctx.fillText(r, CW / 2, panel.y + 30 + i * 32));
+  rows.forEach((r,i)=>ctx.fillText(r, CW/2, py+32+i*34));
 
-  if (Math.floor(distance) >= bestDist && bestDist > 0) {
-    ctx.font = 'bold 17px sans-serif';
-    ctx.fillStyle = '#FFD700';
-    ctx.fillText('🎉 新纪录！', CW / 2, panel.y + panel.h - 18);
+  if (Math.floor(distance)>=bestDist && bestDist>0) {
+    ctx.font='bold 16px sans-serif'; ctx.fillStyle='#FFD700';
+    ctx.fillText('🎉 新纪录！', CW/2, py+ph-18);
   }
 
-  // Retry button
-  ctx.fillStyle = '#228B22';
-  roundRect(CW / 2 - 82, CH * 0.76, 164, 54, 14);
-  ctx.fill();
-  ctx.font = 'bold 20px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('再来一次 🦞', CW / 2, CH * 0.76 + 27);
+  ctx.fillStyle='#228B22'; rr(CW/2-80,CH*0.80,160,52,14); ctx.fill();
+  ctx.font='bold 19px sans-serif'; ctx.fillStyle='#ffffff';
+  ctx.fillText('再来一次 🦞', CW/2, CH*0.80+26);
 }
 
-// ---- INPUT ----
-function getCanvasPos(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (clientX - rect.left) * (CW / rect.width),
-    y: (clientY - rect.top)  * (CH / rect.height),
-  };
+// ── INPUT ───────────────────────────────────────────────────
+function canvasPos(cx,cy) {
+  const rect=canvas.getBoundingClientRect();
+  return { x:(cx-rect.left)*(CW/rect.width), y:(cy-rect.top)*(CH/rect.height) };
 }
 
-// Keyboard state
-const keys = {};
-document.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (state !== 'play') return;
-  if (e.code === 'KeyZ' || e.code === 'KeyJ') doAttack();
-  if (e.code === 'KeyX' || e.code === 'KeyK') { startBlock(); }
+const keys={};
+document.addEventListener('keydown', e=>{
+  keys[e.code]=true;
+  if(state==='play'){
+    if(e.code==='KeyQ') useShield();
+    if(e.code==='KeyE') useHeal();
+  }
 });
-document.addEventListener('keyup', e => {
-  keys[e.code] = false;
-  if (e.code === 'KeyX' || e.code === 'KeyK') endBlock();
-});
+document.addEventListener('keyup', e=>{ keys[e.code]=false; });
 
-// ---- TOUCH / MOUSE INPUT ----
-// We track multiple touches: one for joystick (left side), one for buttons (right side)
+function isRightSide(x) { return x > CW/2; }
 
-function isLeftSide(x) { return x < CW / 2; }
+function joyStart(cx,cy,id){
+  const j=getJoyLayout();
+  joy.active=true; joy.touchId=id;
+  joy.baseX=j.cx; joy.baseY=j.cy; joy.dx=0; joy.dy=0;
+}
+function joyMove(cx,cy){
+  const raw_dx=cx-joy.baseX, raw_dy=cy-joy.baseY;
+  const md=joy.maxDrag;
+  joy.dx=Math.max(-1,Math.min(1,raw_dx/md));
+  joy.dy=Math.max(-1,Math.min(1,raw_dy/md));
+}
+function joyEnd(){ joy.active=false; joy.touchId=null; joy.dx=0; joy.dy=0; }
 
-function handleJoystickStart(cx, cy, id) {
-  const joy = getJoystickLayout();
-  joystick.active  = true;
-  joystick.touchId = id;
-  joystick.baseX   = joy.padX;
-  joystick.baseY   = joy.padY;
-  joystick.dx      = 0;
+function btnDown(cx,cy,id){
+  const s=getShieldBtnLayout(), h=getHealBtnLayout();
+  if(cx>=s.bx&&cx<=s.bx+s.bw&&cy>=s.by&&cy<=s.by+s.bh){ btnShield.pressed=true; btnShield.touchId=id; useShield(); }
+  if(cx>=h.bx&&cx<=h.bx+h.bw&&cy>=h.by&&cy<=h.by+h.bh){ btnHeal.pressed=true; btnHeal.touchId=id; useHeal(); }
+}
+function btnUp(id){
+  if(btnShield.touchId===id||id===null){ btnShield.pressed=false; btnShield.touchId=null; }
+  if(btnHeal.touchId===id||id===null)  { btnHeal.pressed=false;   btnHeal.touchId=null;   }
 }
 
-function handleJoystickMove(cx, cy) {
-  const raw = cx - joystick.baseX;
-  const maxD = joystick.maxDrag;
-  joystick.dx = Math.max(-1, Math.min(1, raw / maxD));
-}
-
-function handleJoystickEnd() {
-  joystick.active  = false;
-  joystick.touchId = null;
-  joystick.dx      = 0;
-}
-
-function handleButtonDown(cx, cy, id) {
-  const atk = getAttackBtnLayout();
-  const blk = getBlockBtnLayout();
-
-  const inAtk = cx >= atk.bx && cx <= atk.bx + atk.bw && cy >= atk.by && cy <= atk.by + atk.bh;
-  const inBlk = cx >= blk.bx && cx <= blk.bx + blk.bw && cy >= blk.by && cy <= blk.by + blk.bh;
-
-  if (inAtk) {
-    btnAttack.pressed = true;
-    btnAttack.touchId = id;
-    doAttack();
-  }
-  if (inBlk) {
-    btnBlock.pressed = true;
-    btnBlock.touchId = id;
-    startBlock();
+function menuTap(cx,cy){
+  if(state==='menu'){
+    const sy=CH*0.83, sh=52;
+    if(cy>=sy&&cy<=sy+sh&&cx>=CW/2-80&&cx<=CW/2+80){ initGame(); state='play'; }
+  } else if(state==='dead'){
+    const sy=CH*0.80, sh=52;
+    if(cy>=sy&&cy<=sy+sh&&cx>=CW/2-80&&cx<=CW/2+80){ initGame(); state='play'; }
   }
 }
 
-function handleButtonUp(id) {
-  if (btnAttack.touchId === id || id === null) {
-    btnAttack.pressed = false;
-    btnAttack.touchId = null;
-  }
-  if (btnBlock.touchId === id || id === null) {
-    btnBlock.pressed = false;
-    btnBlock.touchId = null;
-    endBlock();
-  }
-}
-
-function onMenuTap(cx, cy) {
-  if (state === 'menu') {
-    const sy = CH * 0.79, sh = 54;
-    if (cy >= sy && cy <= sy + sh && cx >= CW/2 - 82 && cx <= CW/2 + 82) {
-      initGame(); state = 'play';
-    }
-  } else if (state === 'dead') {
-    const sy = CH * 0.76, sh = 54;
-    if (cy >= sy && cy <= sy + sh && cx >= CW/2 - 82 && cx <= CW/2 + 82) {
-      initGame(); state = 'play';
-    }
-  }
-}
-
-// Touch events
-canvas.addEventListener('touchstart', e => {
+canvas.addEventListener('touchstart', e=>{
   e.preventDefault();
-  for (const t of e.changedTouches) {
-    const pos = getCanvasPos(t.clientX, t.clientY);
-    if (state !== 'play') { onMenuTap(pos.x, pos.y); continue; }
-    if (isLeftSide(pos.x)) {
-      handleJoystickStart(pos.x, pos.y, t.identifier);
-    } else {
-      handleButtonDown(pos.x, pos.y, t.identifier);
-    }
+  for(const t of e.changedTouches){
+    const p=canvasPos(t.clientX,t.clientY);
+    if(state!=='play'){ menuTap(p.x,p.y); continue; }
+    if(isRightSide(p.x)) joyStart(p.x,p.y,t.identifier);
+    else btnDown(p.x,p.y,t.identifier);
   }
-}, { passive: false });
+},{passive:false});
 
-canvas.addEventListener('touchmove', e => {
+canvas.addEventListener('touchmove', e=>{
   e.preventDefault();
-  for (const t of e.changedTouches) {
-    const pos = getCanvasPos(t.clientX, t.clientY);
-    if (t.identifier === joystick.touchId) {
-      handleJoystickMove(pos.x, pos.y);
-    }
+  for(const t of e.changedTouches){
+    const p=canvasPos(t.clientX,t.clientY);
+    if(t.identifier===joy.touchId) joyMove(p.x,p.y);
   }
-}, { passive: false });
+},{passive:false});
 
-canvas.addEventListener('touchend', e => {
+canvas.addEventListener('touchend', e=>{
   e.preventDefault();
-  for (const t of e.changedTouches) {
-    if (t.identifier === joystick.touchId) handleJoystickEnd();
-    else handleButtonUp(t.identifier);
+  for(const t of e.changedTouches){
+    if(t.identifier===joy.touchId) joyEnd();
+    else btnUp(t.identifier);
   }
-}, { passive: false });
+},{passive:false});
 
-canvas.addEventListener('touchcancel', e => {
+canvas.addEventListener('touchcancel', e=>{
   e.preventDefault();
-  for (const t of e.changedTouches) {
-    if (t.identifier === joystick.touchId) handleJoystickEnd();
-    else handleButtonUp(t.identifier);
+  for(const t of e.changedTouches){
+    if(t.identifier===joy.touchId) joyEnd();
+    else btnUp(t.identifier);
   }
-}, { passive: false });
+},{passive:false});
 
-// Mouse events (desktop)
-let mouseDown = false;
-let mouseIsLeft = false;
-
-canvas.addEventListener('mousedown', e => {
-  const pos = getCanvasPos(e.clientX, e.clientY);
-  if (state !== 'play') { onMenuTap(pos.x, pos.y); return; }
-  mouseDown = true;
-  mouseIsLeft = isLeftSide(pos.x);
-  if (mouseIsLeft) {
-    handleJoystickStart(pos.x, pos.y, 'mouse');
-  } else {
-    handleButtonDown(pos.x, pos.y, 'mouse');
-  }
+let mouseDown=false, mouseRight=false;
+canvas.addEventListener('mousedown', e=>{
+  const p=canvasPos(e.clientX,e.clientY);
+  if(state!=='play'){ menuTap(p.x,p.y); return; }
+  mouseDown=true; mouseRight=isRightSide(p.x);
+  if(mouseRight) joyStart(p.x,p.y,'mouse');
+  else btnDown(p.x,p.y,'mouse');
+});
+canvas.addEventListener('mousemove', e=>{
+  if(!mouseDown) return;
+  const p=canvasPos(e.clientX,e.clientY);
+  if(mouseRight) joyMove(p.x,p.y);
+});
+canvas.addEventListener('mouseup', e=>{
+  if(!mouseDown) return; mouseDown=false;
+  if(mouseRight) joyEnd(); else btnUp('mouse');
+});
+canvas.addEventListener('mouseleave', ()=>{
+  if(mouseDown){ mouseDown=false; if(mouseRight)joyEnd(); else btnUp('mouse'); }
 });
 
-canvas.addEventListener('mousemove', e => {
-  if (!mouseDown) return;
-  const pos = getCanvasPos(e.clientX, e.clientY);
-  if (mouseIsLeft) handleJoystickMove(pos.x, pos.y);
-});
-
-canvas.addEventListener('mouseup', e => {
-  if (!mouseDown) return;
-  mouseDown = false;
-  if (mouseIsLeft) handleJoystickEnd();
-  else handleButtonUp('mouse');
-});
-
-canvas.addEventListener('mouseleave', e => {
-  if (mouseDown) {
-    mouseDown = false;
-    if (mouseIsLeft) handleJoystickEnd();
-    else handleButtonUp('mouse');
-  }
-});
-
-// ---- GAME LOOP ----
-let last = 0;
-function loop(ts) {
+// ── LOOP ────────────────────────────────────────────────────
+let last=0;
+function loop(ts){
   requestAnimationFrame(loop);
-  const dt = ts - last;
-  if (dt < 14) return;
-  last = ts;
-  update();
-  draw();
+  if(ts-last<14) return; last=ts;
+  update(); draw();
 }
 
-// Bootstrap
-initGame();
-state = 'menu';
-requestAnimationFrame(loop);
+initGame(); state='menu'; requestAnimationFrame(loop);
 </script>
 </body>
 </html>
