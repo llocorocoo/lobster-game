@@ -494,22 +494,22 @@ function drawCoin(c) {
 
 function drawEnemy(e) {
   if (e.hp<0) return;
+  // flash: skip draw on alternate frames
+  if (e.flashTimer>0 && Math.floor(e.flashTimer/2)%2===0) return;
   ctx.save();
-  if (e.flashTimer>0 && Math.floor(e.flashTimer/2)%2===0) ctx.filter='brightness(3) saturate(0)';
-  if (freezeTimer>0) ctx.filter='hue-rotate(180deg) brightness(1.5)';
+  if (freezeTimer>0) ctx.globalAlpha = 0.55;
   const sz = e.type.boss ? 50 : 28;
   ctx.font=`${sz}px serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText(e.type.emoji, e.x, e.y);
   ctx.restore();
-
 }
 
 function drawPlayer() {
+  // flash on hit: skip draw on alternate frames
+  if (player.flashTimer>0 && Math.floor(player.flashTimer/3)%2===0) return;
   ctx.save();
-  const blink = shieldActive && Math.floor(Date.now()/80)%2===0;
-  if (blink) { ctx.globalAlpha=0.55; ctx.filter='brightness(2) hue-rotate(200deg)'; }
-  if (player.flashTimer>0 && Math.floor(player.flashTimer/3)%2===0) ctx.filter='brightness(3) saturate(0)';
-  if (player.hitCooldown>0 && !shieldActive && Math.floor(player.hitCooldown/8)%2===0) ctx.globalAlpha=0.5;
+  if (shieldActive && Math.floor(Date.now()/80)%2===0) ctx.globalAlpha=0.5;
+  if (player.hitCooldown>0 && !shieldActive && Math.floor(player.hitCooldown/8)%2===0) ctx.globalAlpha=0.4;
 
   ctx.font='40px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('🦞', player.x, player.y);
